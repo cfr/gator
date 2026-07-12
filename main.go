@@ -3,7 +3,7 @@ package main
 import (
     "fmt"
     "internal/config"
-    "github.com/cfr/gator/internal/database"
+    "internal/database"
     "errors"
     "os"
     "time"
@@ -50,7 +50,7 @@ func handlerAgg(s *state, cmd command) error {
 
 func handlerUsers(s *state, cmd command) error {
     users, err := s.Db.GetUsers(context.Background())
-    if (err != nil) {
+    if err != nil {
         return err
     }
     current := s.C.CurrentUserName
@@ -74,11 +74,11 @@ func handlerLogin(s *state, cmd command) error {
     }
     name := cmd.args[0]
     _, err := s.Db.GetUser(context.Background(), name)
-    if (err != nil) {
+    if err != nil {
         return err
     }
     err = s.C.SetUser(name)
-    if (err != nil) {
+    if err != nil {
         return err
     }
     fmt.Println("User set: " + name)
@@ -93,14 +93,49 @@ func handlerRegister(s *state, cmd command) error {
     currentTime := time.Now()
     params := database.CreateUserParams { uuid.New(), currentTime, currentTime, cmd.args[0] }
     usr, err := s.Db.CreateUser(context.Background(), params)
-    if (err != nil) {
+    if err != nil {
         return err
     }
     err = s.C.SetUser(cmd.args[0])
-    if (err != nil) {
+    if err != nil {
         return err
     }
     fmt.Println("Created user: " + usr.Name)
+    return nil
+}
+
+func handlerAddFeed(s *state, cmd command) error {
+    if len(cmd.args) < 2 {
+        return errors.New("No feed title and url provided")
+    }
+
+    user, err := s.Db.GetUser(context.Background(), s.C.CurrentUserName)
+    if err != nil {
+        return err
+    }
+    currentTime := time.Now()
+    params := database.CreateFeedParams { uuid.New(), currentTime, currentTime, cmd.args[0], cmd.args[1], user.ID }
+    feed, err := s.Db.CreateFeed(context.Background(), params)
+    if err != nil {
+        return err
+    }
+    fmt.Println("Created feed: " + feed.Title + ", " + feed.Url)
+    return nil
+}
+
+func handlerFeeds(s *state, cmd command) error {
+    feeds, err := s.Db.GetFeeds(context.Background())
+    if err != nil {
+        return err
+    }
+    for _, f := range feeds {
+        user, err := s.Db.GetUserByID(context.Background(), f.UserID)
+        if err != nil {
+            return err
+        }
+        line := "* " + user.Name + " : " + f.Title + " : " + f.Url
+        fmt.Println(line)
+    }
     return nil
 }
 
@@ -122,6 +157,8 @@ func main() {
     cmds.register("reset", handlerReset)
     cmds.register("users", handlerUsers)
     cmds.register("agg", handlerAgg)
+    cmds.register("addfeed", handlerAddFeed)
+    cmds.register("feeds", handlerFeeds)
 
     if len(os.Args) < 2 {
         fmt.Println("Missing command")
