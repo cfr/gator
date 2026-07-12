@@ -8,6 +8,7 @@ import (
     "os"
     "time"
     "context"
+    "html"
     "database/sql"
     "github.com/google/uuid"
 )
@@ -16,6 +17,35 @@ import _ "github.com/lib/pq"
 type state struct {
     C *config.Config
     Db *database.Queries
+}
+
+func fetchFeed(ctx context.Context, feedURL string) (*RSSFeed, error) {
+    feed, err := get[RSSFeed](ctx, feedURL)
+    if err != nil {
+        return nil, err
+    }
+    feed.Channel.Title = html.UnescapeString(feed.Channel.Title)
+    feed.Channel.Description = html.UnescapeString(feed.Channel.Description)
+    for i, item := range feed.Channel.Item {
+        feed.Channel.Item[i].Title = html.UnescapeString(item.Title)
+        feed.Channel.Item[i].Description = html.UnescapeString(item.Description)
+    }
+    return feed, nil
+}
+
+func handlerAgg(s *state, cmd command) error {
+    url := "https://www.wagslane.dev/index.xml"
+    feed, err := fetchFeed(context.Background(), url)
+    if err != nil {
+        return err
+    }
+    fmt.Println(feed.Channel.Title + " : " + feed.Channel.Description)
+    for _, item := range feed.Channel.Item {
+        fmt.Println()
+        fmt.Println(item.Title)
+        fmt.Println(item.Description)
+    }
+    return nil
 }
 
 func handlerUsers(s *state, cmd command) error {
@@ -91,6 +121,7 @@ func main() {
     cmds.register("register", handlerRegister)
     cmds.register("reset", handlerReset)
     cmds.register("users", handlerUsers)
+    cmds.register("agg", handlerAgg)
 
     if len(os.Args) < 2 {
         fmt.Println("Missing command")
