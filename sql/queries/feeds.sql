@@ -1,5 +1,5 @@
 -- name: CreateFeed :one
-INSERT INTO feeds (id, created_at, updated_at, title, url, user_id)
+INSERT INTO feeds (id, created_at, updated_at, name, url, user_id)
 VALUES (
     $1,
     $2,
@@ -12,3 +12,9 @@ RETURNING *;
 
 -- name: GetFeeds :many
 SELECT * FROM feeds;
+
+-- name: GetFeedByURL :one
+SELECT * FROM feeds WHERE url = $1;
+
+-- name: DeleteFeeds :exec
+DELETE FROM feeds;

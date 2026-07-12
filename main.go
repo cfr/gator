@@ -19,6 +19,16 @@ type state struct {
     Db *database.Queries
 }
 
+func middlewareLoggedIn(handler func(s *state, cmd command, user database.User) error) func(*state, command) error {
+    return func(s *state, cmd command) error {
+        user, err := s.Db.GetUser(context.Background(), s.C.CurrentUserName)
+        if err != nil {
+            return err
+        }
+        return handler(s, cmd, user)
+    }
+}
+
 func fetchFeed(ctx context.Context, feedURL string) (*RSSFeed, error) {
     feed, err := get[RSSFeed](ctx, feedURL)
     if err != nil {
@@ -65,11 +75,19 @@ func handlerUsers(s *state, cmd command) error {
 }
 
 func handlerReset(s *state, cmd command) error {
-    return s.Db.DeleteUsers(context.Background())
+    err := s.Db.DeleteUsers(context.Background())
+    if err != nil {
+        return err
+    }
+    err = s.Db.DeleteFeeds(context.Background())
+    if err != nil {
+        return err
+    }
+    return s.Db.DeleteFeedFollows(context.Background())
 }
 
 func handlerLogin(s *state, cmd command) error {
-    if len(cmd.args) == 0 {
+    if len(cmd.args) < 1 {
         return errors.New("No username provided")
     }
     name := cmd.args[0]
@@ -86,7 +104,7 @@ func handlerLogin(s *state, cmd command) error {
 }
 
 func handlerRegister(s *state, cmd command) error {
-    if len(cmd.args) == 0 {
+    if len(cmd.args) < 1 {
         return errors.New("No username provided")
     }
 
@@ -104,22 +122,23 @@ func handlerRegister(s *state, cmd command) error {
     return nil
 }
 
-func handlerAddFeed(s *state, cmd command) error {
+func handlerAddFeed(s *state, cmd command, user database.User) error {
     if len(cmd.args) < 2 {
-        return errors.New("No feed title and url provided")
+        return errors.New("No feed name and url provided")
     }
 
-    user, err := s.Db.GetUser(context.Background(), s.C.CurrentUserName)
-    if err != nil {
-        return err
-    }
     currentTime := time.Now()
     params := database.CreateFeedParams { uuid.New(), currentTime, currentTime, cmd.args[0], cmd.args[1], user.ID }
     feed, err := s.Db.CreateFeed(context.Background(), params)
     if err != nil {
         return err
     }
-    fmt.Println("Created feed: " + feed.Title + ", " + feed.Url)
+    followParams := database.CreateFeedFollowParams { uuid.New(), currentTime, currentTime, user.ID, feed.ID }
+    ff, err := s.Db.CreateFeedFollow(context.Background(), followParams)
+    if err != nil {
+        return err
+    }
+    fmt.Println("Created and followed feed: " + ff.FeedName + ", " + feed.Url)
     return nil
 }
 
@@ -133,8 +152,60 @@ func handlerFeeds(s *state, cmd command) error {
         if err != nil {
             return err
         }
-        line := "* " + user.Name + " : " + f.Title + " : " + f.Url
+        line := "* " + user.Name + " : " + f.Name + " : " + f.Url
         fmt.Println(line)
+    }
+    return nil
+}
+
+func handlerFollow(s *state, cmd command, user database.User) error {
+    if len(cmd.args) < 1 {
+        return errors.New("No feed url provided")
+    }
+    feed, err := s.Db.GetFeedByURL(context.Background(), cmd.args[0])
+    if err != nil {
+        return err
+    }
+
+    currentTime := time.Now()
+
+    params := database.CreateFeedFollowParams { uuid.New(), currentTime, currentTime, user.ID, feed.ID }
+    follow, err := s.Db.CreateFeedFollow(context.Background(), params)
+    if err != nil {
+        return err
+    }
+    line := "Followed " + follow.FeedName + " for " + follow.UserName + " : " + feed.Url
+    fmt.Println(line)
+    return nil
+}
+
+func handlerUnfollow(s *state, cmd command, user database.User) error {
+    if len(cmd.args) < 1 {
+        return errors.New("No feed url provided")
+    }
+    feed, err := s.Db.GetFeedByURL(context.Background(), cmd.args[0])
+    if err != nil {
+        return err
+    }
+
+    params := database.DeleteFeedFollowParams { user.ID, feed.ID }
+    err = s.Db.DeleteFeedFollow(context.Background(), params)
+    if err != nil {
+        return err
+    }
+    line := "Unfollowed " + feed.Url
+    fmt.Println(line)
+    return nil
+}
+
+func handlerFollowing(s *state, cmd command, user database.User) error {
+    feed_follows, err := s.Db.GetFeedFollowsForUser(context.Background(), user.ID)
+    if err != nil {
+        return err
+    }
+
+    for _, f := range feed_follows {
+        fmt.Println("* " + f.FeedName)
     }
     return nil
 }
@@ -157,8 +228,11 @@ func main() {
     cmds.register("reset", handlerReset)
     cmds.register("users", handlerUsers)
     cmds.register("agg", handlerAgg)
-    cmds.register("addfeed", handlerAddFeed)
+    cmds.register("addfeed", middlewareLoggedIn(handlerAddFeed))
     cmds.register("feeds", handlerFeeds)
+    cmds.register("follow", middlewareLoggedIn(handlerFollow))
+    cmds.register("following", middlewareLoggedIn(handlerFollowing))
+    cmds.register("unfollow", middlewareLoggedIn(handlerUnfollow))
 
     if len(os.Args) < 2 {
         fmt.Println("Missing command")
