@@ -43,9 +43,13 @@ func fetchFeed(ctx context.Context, feedURL string) (*RSSFeed, error) {
     return feed, nil
 }
 
-func handlerAgg(s *state, cmd command) error {
-    url := "https://www.wagslane.dev/index.xml"
-    feed, err := fetchFeed(context.Background(), url)
+func scrapeFeeds(s *state) error {
+    next, err := s.Db.GetNextFeedToFetch(context.Background())
+    if err != nil {
+        return err
+    }
+
+    feed, err := fetchFeed(context.Background(), next.Url)
     if err != nil {
         return err
     }
@@ -55,7 +59,32 @@ func handlerAgg(s *state, cmd command) error {
         fmt.Println(item.Title)
         fmt.Println(item.Description)
     }
+    currentTime := time.Now()
+    params := database.MarkFeedFetchedParams { next.ID, currentTime }
+    err = s.Db.MarkFeedFetched(context.Background(), params)
+    if err != nil {
+        return err
+    }
     return nil
+}
+
+func handlerAgg(s *state, cmd command) error {
+    if len(cmd.args) < 1 {
+        return errors.New("No duration provided")
+    }
+    durStr := cmd.args[0]
+    dur, err := time.ParseDuration(durStr)
+    if err != nil {
+        return err
+    }
+    fmt.Printf("Collecting feeds every %v\n", dur)
+    ticker := time.NewTicker(dur)
+    for ; ; <-ticker.C {
+        err := scrapeFeeds(s)
+        if err != nil {
+            return err
+        }
+    }
 }
 
 func handlerUsers(s *state, cmd command) error {
