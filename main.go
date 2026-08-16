@@ -9,10 +9,11 @@ import (
     "time"
     "context"
     "html"
+    "strconv"
     "database/sql"
     "github.com/google/uuid"
+    "github.com/lib/pq"
 )
-import _ "github.com/lib/pq"
 
 type state struct {
     C *config.Config
@@ -54,12 +55,27 @@ func scrapeFeeds(s *state) error {
         return err
     }
     fmt.Println(feed.Channel.Title + " : " + feed.Channel.Description)
-    for _, item := range feed.Channel.Item {
-        fmt.Println()
-        fmt.Println(item.Title)
-        fmt.Println(item.Description)
-    }
     currentTime := time.Now()
+    for _, item := range feed.Channel.Item {
+        fmt.Println(item.Title)
+        pubDate, err := time.Parse(time.RFC1123Z, item.PubDate)
+        if err != nil {
+            pubDate, err = time.Parse(time.RFC1123, item.PubDate)
+            if err != nil {
+                fmt.Println("Error parsing time: ", err)
+            }
+        }
+        postParams := database.CreatePostParams { uuid.New(), currentTime, currentTime, item.Title, item.Link, sql.NullString{item.Description, true}, sql.NullTime{pubDate, err == nil}, next.ID }
+        _, err = s.Db.CreatePost(context.Background(), postParams)
+        if err != nil {
+            var pqErr *pq.Error
+            if errors.As(err, &pqErr) && pqErr.Code == "23505" {
+                continue // ignore duplicate url
+            }
+            fmt.Println(err)
+        }
+    }
+
     params := database.MarkFeedFetchedParams { next.ID, currentTime }
     err = s.Db.MarkFeedFetched(context.Background(), params)
     if err != nil {
@@ -85,6 +101,30 @@ func handlerAgg(s *state, cmd command) error {
             return err
         }
     }
+}
+
+func handlerBrowse(s *state, cmd command, user database.User) error {
+    limit := 2
+    if len(cmd.args) > 0 {
+        lim, err := strconv.Atoi(cmd.args[0])
+        if err != nil {
+            return err
+        } else {
+            limit = lim
+        }
+    }
+    params := database.GetPostsByUserParams { user.ID, int32(limit) }
+    posts, err := s.Db.GetPostsByUser(context.Background(), params)
+    if err != nil {
+        return err
+    }
+    for _, post := range posts {
+        fmt.Println()
+        fmt.Println(post.Title)
+        fmt.Println(post.Description.String)
+        fmt.Println(post.PublishedAt.Time)
+    }
+    return nil
 }
 
 func handlerUsers(s *state, cmd command) error {
@@ -262,6 +302,7 @@ func main() {
     cmds.register("follow", middlewareLoggedIn(handlerFollow))
     cmds.register("following", middlewareLoggedIn(handlerFollowing))
     cmds.register("unfollow", middlewareLoggedIn(handlerUnfollow))
+    cmds.register("browse", middlewareLoggedIn(handlerBrowse))
 
     if len(os.Args) < 2 {
         fmt.Println("Missing command")
